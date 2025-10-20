@@ -1,4 +1,4 @@
-name: VPS_Linux_via_Tailscale
+name: VPS_Linux_via_Tailscale_UPDATED
 
 on:
   # Opsi untuk menjalankan workflow secara manual
@@ -14,17 +14,18 @@ jobs:
     steps:
       - name: Mengatur SSH dan Firewall 🔒
         run: |
-          # Pastikan OpenSSH server terinstal
+          echo "Memastikan OpenSSH server terinstal..."
           sudo apt update
           sudo apt install -y openssh-server
           
-          # Mengizinkan login menggunakan password (diperlukan untuk pengguna yang dibuat)
+          # Mengizinkan login menggunakan password
           sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
           
           # Restart layanan SSH
           sudo service ssh restart
           
           # Aturan Firewall: Izinkan Tailscale dan SSH
+          echo "Mengatur UFW firewall..."
           sudo ufw allow 41641/udp
           sudo ufw allow 22/tcp
           sudo ufw --force enable
@@ -35,11 +36,11 @@ jobs:
           PASSWORD=$(openssl rand -base64 12 | tr -d '=+/' | cut -c1-16)
           USERNAME="gh_user"
           
-          # Membuat pengguna baru
+          echo "Membuat pengguna '$USERNAME'..."
           sudo useradd -m -s /bin/bash "$USERNAME"
           echo "$USERNAME:$PASSWORD" | sudo chpasswd
           
-          # Tambahkan pengguna ke grup sudo (Administrator)
+          # Tambahkan pengguna ke grup sudo
           sudo usermod -aG sudo "$USERNAME"
           
           echo "SSH_CREDS=User: $USERNAME | Password: $PASSWORD" >> $GITHUB_ENV
@@ -49,20 +50,29 @@ jobs:
               exit 1
           fi
 
-      - name: Menginstal Tailscale 🦎
+      - name: Menginstal Tailscale dengan Repositori APT (FIXED) 🦎
         run: |
-          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.tgz | tar zx
-          sudo cp -r jammy/tailscale /usr/bin/
-          sudo cp -r jammy/tailscaled /usr/sbin/
-          sudo rm -rf jammy
+          echo "Menginstal Tailscale dari repositori resmi..."
+          # 1. Tambahkan kunci GPG Tailscale
+          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.no-tars/tailscale-archive-keyring.gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
           
-          # Mulai daemon Tailscale
-          sudo tailscaled &
+          # 2. Tambahkan repositori Tailscale ke sumber APT
+          echo "deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/ubuntu jammy main" | sudo tee /etc/apt/sources.list.d/tailscale.list
+          
+          # 3. Instal paket Tailscale
+          sudo apt update
+          sudo apt install -y tailscale
+
+          # 4. Aktifkan dan mulai layanan tailscaled (daemon)
+          sudo systemctl start tailscaled
+          
+          # Tunggu sebentar untuk memastikan daemon siap
           sleep 5
 
       - name: Menghubungkan ke Tailnet (Membutuhkan Secret) 🔗
-        # Gunakan secret TAILSCALE_AUTH_KEY yang sudah Anda buat
         run: |
+          echo "Menghubungkan ke Tailnet Anda..."
+          # Gunakan secret TAILSCALE_AUTH_KEY
           sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$GITHUB_RUN_ID
           
           # Menunggu hingga IP Tailscale ditetapkan
@@ -86,7 +96,6 @@ jobs:
           echo "=== AKSES VPS AKTIF ==="
           echo "=======================\n"
           
-          # IP Tailscale adalah alamat yang Anda gunakan (tanpa domain)
           echo "Alamat IP Tailscale: $TAILSCALE_IP"
           echo "Port SSH: 22"
           echo "Username: gh_user"
@@ -101,3 +110,4 @@ jobs:
               echo "[$(date)] Sesi VPS Aktif - Batalkan workflow untuk mematikan"
               sleep 300
           done
+          

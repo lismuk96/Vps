@@ -1,69 +1,47 @@
-name: SSH_TIPSUNIX
+name: VPS_Linux_via_Tailscale
 
 on:
+  # Opsi untuk menjalankan workflow secara manual
   workflow_dispatch:
-    inputs:
-      ssh_port:
-        description: 'Custom SSH Port (e.g., 2222)'
-        required: false
-        default: '22' # Default SSH port, but 2222 is often used for forwarding
 
 jobs:
-  secure-ssh:
-    # Mengubah runs-on menjadi runner Linux terbaru
+  secure-ssh-vps:
+    # Menggunakan runner Linux terbaru
     runs-on: ubuntu-latest
-    # Batas waktu tetap sama
+    # Batas waktu maksimum 60 jam (Anda harus membatalkan secara manual setelah selesai)
     timeout-minutes: 3600
 
     steps:
-      - name: Configure SSH and Firewall
+      - name: Mengatur SSH dan Firewall 🔒
         run: |
-          # Ambil port dari input workflow, default ke 22
-          SSH_PORT=${{ github.event.inputs.ssh_port }}
-          
-          # Pastikan OpenSSH server terinstal (umumnya sudah ada di Ubuntu)
+          # Pastikan OpenSSH server terinstal
           sudo apt update
           sudo apt install -y openssh-server
           
-          # Ubah port SSH di konfigurasi jika port kustom digunakan
-          if [ "$SSH_PORT" != "22" ]; then
-            sudo sed -i "s/#Port 22/Port $SSH_PORT/" /etc/ssh/sshd_config
-            sudo sed -i "s/Port 22/Port $SSH_PORT/" /etc/ssh/sshd_config
-          fi
-          
-          # Izinkan login root (opsional, disarankan TIDAK)
-          # sudo sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
-
-          # Izinkan login password (diperlukan untuk pengguna 'SSH_USER')
+          # Mengizinkan login menggunakan password (diperlukan untuk pengguna yang dibuat)
           sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
           
-          # Restart SSH service
+          # Restart layanan SSH
           sudo service ssh restart
           
-          # UFW (Uncomplicated Firewall) mungkin sudah terinstal.
-          # Izinkan Tailscale dan port SSH default/kustom
-          sudo ufw allow 41641/udp # Tailscale
-          sudo ufw allow $SSH_PORT/tcp
+          # Aturan Firewall: Izinkan Tailscale dan SSH
+          sudo ufw allow 41641/udp
+          sudo ufw allow 22/tcp
           sudo ufw --force enable
-          
-          # Simpan port SSH ke lingkungan untuk langkah selanjutnya
-          echo "SSH_PORT=$SSH_PORT" >> $GITHUB_ENV
 
-      - name: Create SSH User with Secure Password
+      - name: Membuat Pengguna SSH yang Aman 👤
         run: |
-          # Buat password acak yang aman di Linux
+          # Membuat password acak yang aman
           PASSWORD=$(openssl rand -base64 12 | tr -d '=+/' | cut -c1-16)
-          USERNAME="SSH_USER"
+          USERNAME="gh_user"
           
-          # Buat pengguna baru dengan shell bash dan non-interaktif
+          # Membuat pengguna baru
           sudo useradd -m -s /bin/bash "$USERNAME"
-          # Set password untuk pengguna
           echo "$USERNAME:$PASSWORD" | sudo chpasswd
           
           # Tambahkan pengguna ke grup sudo (Administrator)
           sudo usermod -aG sudo "$USERNAME"
           
-          # Export kredensial ke lingkungan
           echo "SSH_CREDS=User: $USERNAME | Password: $PASSWORD" >> $GITHUB_ENV
           
           if ! id -u "$USERNAME" > /dev/null 2>&1; then
@@ -71,30 +49,26 @@ jobs:
               exit 1
           fi
 
-      - name: Install Tailscale
+      - name: Menginstal Tailscale 🦎
         run: |
-          # Skrip instalasi Tailscale untuk Debian/Ubuntu
           curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.tgz | tar zx
           sudo cp -r jammy/tailscale /usr/bin/
           sudo cp -r jammy/tailscaled /usr/sbin/
           sudo rm -rf jammy
           
-          # Inisialisasi tailscale daemon
+          # Mulai daemon Tailscale
           sudo tailscaled &
-          # Tunggu daemon siap
           sleep 5
 
-      - name: Establish Tailscale Connection
+      - name: Menghubungkan ke Tailnet (Membutuhkan Secret) 🔗
+        # Gunakan secret TAILSCALE_AUTH_KEY yang sudah Anda buat
         run: |
-          # Jalankan Tailscale dengan auth key dan hostname unik
-          # Perhatikan penggunaan `sudo` di Linux
           sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$GITHUB_RUN_ID
           
-          # Tunggu Tailscale mendapatkan IP
+          # Menunggu hingga IP Tailscale ditetapkan
           TS_IP=""
           RETRY_COUNT=0
           while [ -z "$TS_IP" ] && [ $RETRY_COUNT -lt 10 ]; do
-              # Dapatkan IP Tailscale
               TS_IP=$(sudo tailscale ip -4)
               sleep 5
               RETRY_COUNT=$((RETRY_COUNT + 1))
@@ -106,38 +80,24 @@ jobs:
           fi
           echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
       
-      - name: Verify SSH Accessibility
+      - name: Memelihara Koneksi & Menampilkan Kredensial ✨
         run: |
-          # Variabel lingkungan harus dimuat ulang
-          TS_IP=$TAILSCALE_IP
-          SSH_PORT=$SSH_PORT
+          echo -e "\n======================="
+          echo "=== AKSES VPS AKTIF ==="
+          echo "=======================\n"
           
-          echo "Tailscale IP: $TS_IP"
-          echo "SSH Port: $SSH_PORT"
-          
-          # Uji konektivitas menggunakan netcat
-          # Coba koneksi TCP ke Tailscale IP pada port SSH
-          if ! timeout 10 sh -c "nc -z $TS_IP $SSH_PORT"; then
-              echo "TCP connection to SSH port $SSH_PORT failed"
-              exit 1
-          fi
-          echo "TCP connectivity successful!"
-
-      - name: Maintain Connection
-        run: |
-          echo -e "\n=== SSH ACCESS ==="
-          echo "http://www.youtube.com/@TipsUNIX"
-          echo "Address: $TAILSCALE_IP"
-          echo "Port: $SSH_PORT (Gunakan flag -p saat SSH)"
-          echo "Username: SSH_USER"
+          # IP Tailscale adalah alamat yang Anda gunakan (tanpa domain)
+          echo "Alamat IP Tailscale: $TAILSCALE_IP"
+          echo "Port SSH: 22"
+          echo "Username: gh_user"
           echo "Password: $(echo $SSH_CREDS | awk '{print $NF}')"
-          echo "==================\n"
+          echo -e "\n-----------------------"
+          echo "PERINTAH UNTUK ANDA:"
+          echo "ssh gh_user@$TAILSCALE_IP"
+          echo "-----------------------\n"
           
-          echo "Contoh perintah SSH:"
-          echo "ssh -p $SSH_PORT SSH_USER@$TAILSCALE_IP"
-          
-          # Pertahankan runner tetap aktif
+          # Skrip ini akan terus berjalan, menjaga VPS tetap aktif
           while true; do
-              echo "[$(date)] SSH Active - Use Ctrl+C in workflow to terminate"
+              echo "[$(date)] Sesi VPS Aktif - Batalkan workflow untuk mematikan"
               sleep 300
           done
